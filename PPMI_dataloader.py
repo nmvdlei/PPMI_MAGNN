@@ -470,6 +470,10 @@ class DataLoader():
         metabolite_features_all_df = pd.concat(metabolite_features_dfs_list, axis=1)        
         metabolite_features_df = metabolite_features_all_df.loc[self.hmdb_log2fold_change_CSS.index]
         
+        #Remove those columns with only a single unique value
+        columns_with_single_unique_value = metabolite_features_df.columns[metabolite_features_df.nunique()==1]
+        metabolite_features_df = metabolite_features_df.drop(columns_with_single_unique_value, axis=1)
+        
         return metabolite_features_df
     
     def prune_PPMI_network(self, nodes, level=2):
