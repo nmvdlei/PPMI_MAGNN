@@ -124,7 +124,7 @@ class ExerciseMetabolomicsDataLoader():
 class MetaboliteNameMatcher():
     def __init__(self, metabolite_names_list, name_accessions=None, conversion_table=None):
         self.source_files = self.get_source_files()
-        self.hmdb_accession_synonyms, self.kegg_compounds, self.compound_cmpdID = self.import_source_files()
+        self.hmdb_accession_synonyms, self.kegg_compounds, self.compound_cmpdID, self.kegg_to_hmdb = self.import_source_files()
 
         self.metabolite_names_list = metabolite_names_list
         self.conversion_table = conversion_table        
@@ -132,7 +132,7 @@ class MetaboliteNameMatcher():
             self.name_accessions = name_accessions
         else:
             self.name_accessions = self.obtain_name_accessions() 
-        
+                
         self.unnamed_metabolites = self.create_unnamed_metabolites_table()
         
         self.conversion_table = self.extend_conversion_table()
@@ -141,30 +141,46 @@ class MetaboliteNameMatcher():
             self.name_accessions = self.obtain_name_accessions() 
             self.unnamed_metabolites = self.create_unnamed_metabolites_table()
         
+        self.imput_hmdb_id_from_kegg()
+            
     def get_source_files(self):
         hmdb_metabolites_synonyms_file = du.get_file_path(data_dir, 'HMDB metabolites', 'Parsed pickle', 'hmdb_metabolites_synonyms.p')
         kegg_compounds_pickle_file = du.get_file_path(data_dir, 'Kegg compounds', 'pickle', 'kegg_compounds.p')
-
         compound_cmpdID_file = du.get_file_path(data_dir, 'Exercise metabolomics DB', 'millan', 'compound_cmpdID.csv')
+        metabolite_kegg_to_hmdb_file = du.get_file_path(data_dir, 'HMDB metabolites', 'Parsed pickle', 'kegg_id_to_hmdb_id.p')
+
         
         source_files = {'hmdb_synonyms': hmdb_metabolites_synonyms_file,
                         'kegg_compounds': kegg_compounds_pickle_file,
-                        'compound_cmpdID': compound_cmpdID_file}
+                        'compound_cmpdID': compound_cmpdID_file,
+                        'kegg_to_hmdb': metabolite_kegg_to_hmdb_file}
         return source_files
     
     def import_source_files(self):
         hmdb_accession_synonyms = du.read_from_pickle(self.source_files['hmdb_synonyms'])
         kegg_compounds = du.read_from_pickle(self.source_files['kegg_compounds'])
         compound_cmpdID = pd.read_csv(self.source_files['compound_cmpdID'])
+        kegg_to_hmdb = du.read_from_pickle(self.source_files['kegg_to_hmdb'])
         
-        return hmdb_accession_synonyms, kegg_compounds, compound_cmpdID
+        return hmdb_accession_synonyms, kegg_compounds, compound_cmpdID, kegg_to_hmdb
 
     def obtain_name_accessions(self):
         hmdb_accessions = [self.find_hmdb_accession(self.hmdb_accession_synonyms, name) for name in self.metabolite_names_list]
         kegg_accessions = [self.find_kegg_accession(self.kegg_compounds, name) for name in self.metabolite_names_list]
+        kegg_accessions_stripped = [kegg_accession[4:] if kegg_accession != None else None for kegg_accession in list(kegg_accessions)]
+        
+        hmdb_id_from_kegg = pd.Series(kegg_accessions_stripped).apply(self.get_hmdb_id) 
 
-        return pd.DataFrame([self.metabolite_names_list, pd.Series(hmdb_accessions), pd.Series(kegg_accessions)], index = ['name', 'hmdb_accession', 'kegg_accession']).T
+        name_accessions = pd.DataFrame([self.metabolite_names_list, pd.Series(hmdb_accessions), pd.Series(kegg_accessions), pd.Series(kegg_accessions_stripped), pd.Series(hmdb_id_from_kegg)], index = ['name', 'hmdb_accession', 'kegg_accession', 'kegg_accessions_stripped', 'hmdb_id_from_kegg_id']).T
+        return name_accessions
 
+    def imput_hmdb_id_from_kegg(self):
+        hmdb_kegg_hmdb = self.name_accessions[['hmdb_accession', 'hmdb_id_from_kegg_id']]
+        no_hmdb_id = hmdb_kegg_hmdb[hmdb_kegg_hmdb['hmdb_accession'].isna()]
+        impute_hmdb_id_from_kegg = no_hmdb_id[no_hmdb_id['hmdb_id_from_kegg_id'].notna()]
+        impute_hmdb_id_from_kegg['hmdb_accession'] = impute_hmdb_id_from_kegg['hmdb_id_from_kegg_id']
+        self.name_accessions.update(impute_hmdb_id_from_kegg)        
+    
     def create_unnamed_metabolites_table(self):
         unnamed_metabolites = self.name_accessions[self.name_accessions['hmdb_accession'].isna() & self.name_accessions['kegg_accession'].isna()]
         unnamed_metabolites.loc[:,'Reason for exclusion'] = [self.reason_for_exclusion(unnamed_metabolite) for unnamed_metabolite in unnamed_metabolites['name']]
@@ -224,6 +240,19 @@ class MetaboliteNameMatcher():
 
         return None
 
+    def get_hmdb_id(self, kegg_id):
+        if kegg_id != None:
+            try:
+                hmdb_ids = self.kegg_to_hmdb.loc[kegg_id]
+                if len(hmdb_ids)>=1:
+                    return hmdb_ids[0]
+                else:
+                    return None
+            except:
+                return None
+        else:
+            return None
+    
     def find_hmdb_metabolite(self, accession):
         for metabolite in self.hmdb_accession_synonyms:
             if metabolite['accession'] == accession:
@@ -367,8 +396,7 @@ class DataLoader():
         self.allowed_ccs_values = allowed_ccs_values
         self.millan_2020 = ExerciseMetabolomicsDataLoader('millan', calc_CCS_settings)
         
-        if metabolite_matcher_file is None:
-            metabolite_matcher_file = du.get_file_path(data_dir, 'class based structure', 'metabolite matching', 'matcher.p')
+        if metabolite_matcher_file is not None:
             self.metabolite_matcher = du.read_from_pickle(metabolite_matcher_file)
         else:
             self.metabolite_matcher = MetaboliteNameMatcher(list(self.millan_2020.log2fold_change.index))
