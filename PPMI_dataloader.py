@@ -391,7 +391,7 @@ class MetaboliteNameMatcher():
 # matcher = MetaboliteNameMatcher(millan_exercise_metabolomics['Metabolite'])
 
 class DataLoader():
-    def __init__(self, include_feature_category, metabolite_matcher_file=None, calc_CCS_settings=None, allowed_ccs_values=[-1, 0, 1]):
+    def __init__(self, include_feature_category, metabolite_matcher_file=None, calc_CCS_settings=None, allowed_ccs_values=[-1, 0, 1], min_metabolite_per_feature=6, min_proteins_per_feature=3):
         self.include_feature_category = include_feature_category
         self.allowed_ccs_values = allowed_ccs_values
         self.millan_2020 = ExerciseMetabolomicsDataLoader('millan', calc_CCS_settings)
@@ -408,6 +408,9 @@ class DataLoader():
         networkx_pickle_file = du.get_file_path(data_dir, 'interactome', 'networkx pickle', 'prot_hmdb_networkx_graph.p')
         self.PPMI_full = nx.read_gpickle(networkx_pickle_file)
         self.remove_isolated_nodes_from_full_PPMI()
+        
+        self.protein_nodes_gene = self.match_protein_nodes_to_gene()
+        self.remove_unmatched_proteins_from_full_PPMI()
             
         self.hmdb_log2fold_change_CSS = self.get_metabolites_in_PPMI(self.hmdb_log2fold_change_CSS)
         
@@ -415,8 +418,10 @@ class DataLoader():
         self.remove_isolated_nodes_from_pruned_PPMI()
         
         self.y = self.hmdb_log2fold_change_CSS['CCS']
-        self.X = self.construct_metabolite_feature_df()
-        
+        self.X = self.construct_metabolite_feature_df(min_metabolite_per_feature)
+        self.protein_features = self.construct_protein_feature_df(min_proteins_per_feature)
+        self.drop_feature_columns_with_NaNs()
+    
         
     def get_hmdb_metabolites_with_data(self):
         hmdb_id = self.metabolite_matcher.name_accessions.set_index('name')['hmdb_accession']
@@ -458,11 +463,55 @@ class DataLoader():
         elif in_out=='out':
             not_in_interactome = df[~df['in_interactome']]
             return list(not_in_interactome['hmdb_accession'])
+
+    def get_gene_from_synonym(self, synonym, gene_synonym_dict):
+        try:
+            return gene_synonym_dict[synonym]
+        except KeyError:
+            return None
+        
+    def remove_unmatched_proteins_from_full_PPMI(self):        
+        node_gene = self.protein_nodes_gene
+        unmatched_protein_nodes = list(node_gene[node_gene.isna()].index)
+        
+        for node in unmatched_protein_nodes:
+            if node in self.PPMI_full.nodes:
+                self.PPMI_full.remove_node(node)        
+        
+    def match_protein_nodes_to_gene(self):
+        gene_synonym_dict_file = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'protein matching', 'gene_synonym_dict.p')
+        gene_synonym_dict = du.read_from_pickle(gene_synonym_dict_file)
+
+        protein_class_file = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'Feature dfs pickle', 'protein_class.p')
+        protein_class_columns = du.read_from_pickle(protein_class_file)
+        
+        protein_nodes = pd.Series([node for node in list(self.PPMI_full.nodes) if not 'HMDB' in node])        
+        protein_node_in_index = pd.Series([protein_node in protein_class_columns.index for protein_node in protein_nodes])
+
+        protein_nodes_with_features = protein_nodes[protein_node_in_index]
+        protein_nodes_without_features = protein_nodes[~protein_node_in_index]
+        protein_matching_using_dict = pd.Series([self.get_gene_from_synonym(node, gene_synonym_dict) for node in protein_nodes_without_features], index=protein_nodes_without_features.index)
+
+        df_result = pd.DataFrame(protein_nodes, columns=['Node'])
+        df_result['Gene'] = [None]*len(protein_nodes)
+        df_result.loc[protein_nodes_with_features.index, 'Gene'] = protein_nodes_with_features
+        df_result.loc[protein_matching_using_dict.index, 'Gene'] = protein_matching_using_dict
+        df_result = df_result.set_index('Node')
+
+        return df_result['Gene']
+
+    def print_protein_names(self, list_of_proteins):
+        print("'"+"', '".join(list_of_proteins)+"'")
         
     def get_metabolite_nodes(self):
         all_nodes = list(self.PPMI_full.nodes)
         metabolites_in_PPMI = [m for m in all_nodes if 'HMDB' in m]
         return metabolites_in_PPMI
+
+    def get_protein_nodes(self):
+        all_nodes = list(self.PPMI_pruned.nodes)
+        proteins_in_PPMI = [m for m in all_nodes if 'HMDB' not in m]
+        return proteins_in_PPMI
     
     def in_list(self, value, listing):
         return value in listing
@@ -485,11 +534,15 @@ class DataLoader():
         for k, v in self.include_feature_category.items():
             print(f"   {k}: '{v}'")
         print('')
-            
-    def construct_metabolite_feature_df(self):
+
+    def drop_feature_columns_with_NaNs(self):
+        columns_with_NaNs = self.X.isna().sum()[self.X.isna().sum() > 0].index.to_list()
+        self.X = self.X.drop(columns_with_NaNs, axis=1)
+        
+    def construct_metabolite_feature_df(self, min_metabolite_per_feature=6):
         metabolite_features_dfs_list = [] 
 
-        for feature_name, include in self.include_feature_category.items():
+        for feature_name, include in self.include_feature_category['metabolite'].items():
             if include:
                 file_name = du.get_file_path(data_dir, 'HMDB metabolites', 'Feature dfs pickle', f'hmdb_metabolites_{feature_name}.p')
                 feature_df = du.read_from_pickle(file_name)
@@ -502,7 +555,31 @@ class DataLoader():
         columns_with_single_unique_value = metabolite_features_df.columns[metabolite_features_df.nunique()==1]
         metabolite_features_df = metabolite_features_df.drop(columns_with_single_unique_value, axis=1)
         
+        metabolite_features_df = metabolite_features_df.loc[:,pd.DataFrame(metabolite_features_df == 0).sum() >= min_metabolite_per_feature]
+        metabolite_features_df = metabolite_features_df.loc[:,pd.DataFrame(metabolite_features_df == 1).sum() >= min_metabolite_per_feature]
+        
         return metabolite_features_df
+    
+    def construct_protein_feature_df(self, min_proteins_per_feature=3):
+        protein_features_dfs_list = [] 
+
+        for feature_name, include in self.include_feature_category['protein'].items():
+            if include:
+                file_name = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'Feature dfs pickle', f'{feature_name}.p')
+                feature_df = du.read_from_pickle(file_name)
+                protein_features_dfs_list.append(feature_df)
+
+        protein_features_all_df = pd.concat(protein_features_dfs_list, axis=1)        
+        protein_features_df = protein_features_all_df.loc[self.protein_nodes_gene[self.get_protein_nodes()]]
+        
+        #Remove those columns with only a single unique value
+        columns_with_single_unique_value = protein_features_df.columns[protein_features_df.nunique()==1]
+        protein_features_df = protein_features_df.drop(columns_with_single_unique_value, axis=1)
+
+        protein_features_df = protein_features_df.loc[:,pd.DataFrame(protein_features_df == 0).sum() >= min_proteins_per_feature]
+        protein_features_df = protein_features_df.loc[:,pd.DataFrame(protein_features_df == 1).sum() >= min_proteins_per_feature]
+        
+        return protein_features_df
     
     def prune_PPMI_network(self, nodes, level=2):
         G = self.PPMI_full
