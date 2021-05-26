@@ -404,9 +404,8 @@ class DataLoader():
         self.hmdb_log2fold_change_CSS = self.get_hmdb_metabolites_with_data()
         self.hmdb_log2fold_change_CSS = self.get_non_duplicate_rows(self.hmdb_log2fold_change_CSS)
         self.hmdb_log2fold_change_CSS = self.get_rows_with_allowed_values(self.hmdb_log2fold_change_CSS)
-        
-        networkx_pickle_file = du.get_file_path(data_dir, 'interactome', 'networkx pickle', 'prot_hmdb_networkx_graph.p')
-        self.PPMI_full = nx.read_gpickle(networkx_pickle_file)
+
+        self.PPMI_full = self.convert_interactome_to_graph(self.get_interactome())
         self.remove_isolated_nodes_from_full_PPMI()
         
         self.protein_nodes_gene = self.match_protein_nodes_to_gene()
@@ -421,7 +420,19 @@ class DataLoader():
         self.X = self.construct_metabolite_feature_df(min_metabolite_per_feature)
         self.protein_features = self.construct_protein_feature_df(min_proteins_per_feature)
         self.drop_feature_columns_with_NaNs()
-    
+
+    def get_interactome(self):
+        prot_hmdb_interactome_file = du.get_file_path(data_dir, 'interactome', 'txt', 'prot_hmdb_interactome.txt')
+        prot_hmdb_interactome = pd.read_csv(prot_hmdb_interactome_file, sep="\t")
+        return prot_hmdb_interactome
+
+    def convert_interactome_to_graph(self, interactome):
+        G = nx.Graph()
+        nodes = np.unique(np.concatenate((interactome['protein1'].unique(), interactome['protein2'].unique())))
+        G.add_nodes_from(nodes)
+        edges = interactome[['protein1', 'protein2', 'cost']].values.tolist()
+        G.add_weighted_edges_from(edges, weight='cost')
+        return G        
         
     def get_hmdb_metabolites_with_data(self):
         hmdb_id = self.metabolite_matcher.name_accessions.set_index('name')['hmdb_accession']
