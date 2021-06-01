@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import math
 import networkx as nx
+from pathlib import Path
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -102,7 +103,7 @@ class ExerciseMetabolomicsDataLoader():
     def get_CCS_distribution_stats(self):
         return pd.DataFrame([self.CCS.value_counts(), self.CCS.value_counts()/len(self.CCS)*100], index=['Amount', 'Percentage']).T.style.format({'Amount': "{:.0f}", "Percentage": "{:.1f}%"})
     
-    def plot_changes(self, change_type, from_id = 0, till_id = 40):
+    def plot_changes(self, change_type, from_id = 0, till_id = 40, save_fig=False):
         if change_type=='Mean log2fold change':
             change = self.log2fold_change
         elif change_type=='CCS':
@@ -112,9 +113,14 @@ class ExerciseMetabolomicsDataLoader():
         df = pd.DataFrame([self.CCS.index, change], index=['Metabolite', change_type]).T
         df = df.set_index('Metabolite')
 
-        plt.figure(figsize=(3,8))
+        fig = plt.figure(figsize=(3,8))
+        fig.patch.set_facecolor('white')    
         plt.barh(df.index[from_id:till_id], df[change_type][from_id:till_id])
         plt.xlabel(change_type, fontsize=14)
+        plt.tight_layout()
+        if save_fig:            
+            filename = f'sportomics--{change_type}--{from_id}--{till_id}.png'
+            plt.savefig(Path('Figures', filename), bbox_inches='tight')
         plt.show()
     
     
@@ -566,8 +572,11 @@ class DataLoader():
         columns_with_single_unique_value = metabolite_features_df.columns[metabolite_features_df.nunique()==1]
         metabolite_features_df = metabolite_features_df.drop(columns_with_single_unique_value, axis=1)
         
-        metabolite_features_df = metabolite_features_df.loc[:,pd.DataFrame(metabolite_features_df == 0).sum() >= min_metabolite_per_feature]
-        metabolite_features_df = metabolite_features_df.loc[:,pd.DataFrame(metabolite_features_df == 1).sum() >= min_metabolite_per_feature]
+        correct_feature_column = np.array(pd.DataFrame(metabolite_features_df == 0).sum() >= min_metabolite_per_feature) & np.array(pd.DataFrame(metabolite_features_df == 1).sum() >= min_metabolite_per_feature)
+        float_columns = np.array(metabolite_features_df.dtypes == np.dtype('float64'))
+        columns_to_include = correct_feature_column | float_columns #correct feature column or float column 
+        
+        metabolite_features_df = metabolite_features_df.loc[:,columns_to_include]
         
         return metabolite_features_df
     
