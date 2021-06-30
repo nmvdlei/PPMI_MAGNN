@@ -15,7 +15,7 @@ n_metapaths = 2
 num_edge_type = 2
 out_dim = 3
 dropout_rate = 0.5
-lr = 0.01
+lr = 0.005
 weight_decay = 0.001
 etypes_list = [[0, 1, 0], [0, 1, 1, 0]]
 
