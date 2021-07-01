@@ -4,15 +4,304 @@ import matplotlib.pyplot as plt
 import math
 import networkx as nx
 from pathlib import Path
-
 import warnings
-warnings.filterwarnings("ignore")
-
 import data_utils as du
 data_dir = du.find_data_dir('app')
+warnings.filterwarnings("ignore")
 
-class InputError(Exception):
-    pass
+class DataLoader():
+    def __init__(self, include_feature_category, metabolite_matcher_file=None, calc_CCS_settings=None, allowed_ccs_values=[-1, 0, 1], min_metabolite_per_feature=6, min_proteins_per_feature=3):
+        self.include_feature_category = include_feature_category
+        self.allowed_ccs_values = allowed_ccs_values
+        self.millan_2020 = ExerciseMetabolomicsDataLoader('millan', calc_CCS_settings)
+        
+        if metabolite_matcher_file is not None:
+            self.metabolite_matcher = du.read_from_pickle(metabolite_matcher_file)
+        else:
+            self.metabolite_matcher = MetaboliteNameMatcher(list(self.millan_2020.log2fold_change.index))
+            
+        self.hmdb_log2fold_change_CSS = self.get_hmdb_metabolites_with_data()
+        self.hmdb_log2fold_change_CSS = self.get_non_duplicate_rows(self.hmdb_log2fold_change_CSS)
+        self.hmdb_log2fold_change_CSS = self.get_rows_with_allowed_values(self.hmdb_log2fold_change_CSS)
+
+        self.PPMI_full = self.convert_interactome_to_graph(self.get_interactome())
+        self.remove_isolated_nodes_from_full_PPMI()
+        
+        self.protein_nodes_gene = self.match_protein_nodes_to_gene()
+        self.remove_unmatched_proteins_from_full_PPMI()
+            
+        self.hmdb_log2fold_change_CSS = self.get_metabolites_in_PPMI(self.hmdb_log2fold_change_CSS)
+        
+        self.PPMI_pruned = self.prune_PPMI_network(self.hmdb_log2fold_change_CSS.index)
+        self.remove_isolated_nodes_from_pruned_PPMI()
+        
+        self.y = self.hmdb_log2fold_change_CSS['CCS']
+        self.X = self.construct_metabolite_feature_df(min_metabolite_per_feature)
+        self.protein_features = self.construct_protein_feature_df(min_proteins_per_feature)
+        self.drop_feature_columns_with_NaNs()
+
+    def get_interactome(self):
+        prot_hmdb_interactome_file = du.get_file_path(data_dir, 'interactome', 'txt', 'prot_hmdb_interactome.txt')
+        prot_hmdb_interactome = pd.read_csv(prot_hmdb_interactome_file, sep="\t")
+        return prot_hmdb_interactome
+
+    def convert_interactome_to_graph(self, interactome):
+        G = nx.Graph()
+        nodes = np.unique(np.concatenate((interactome['protein1'].unique(), interactome['protein2'].unique())))
+        G.add_nodes_from(nodes)
+        edges = interactome[['protein1', 'protein2', 'cost']].values.tolist()
+        G.add_weighted_edges_from(edges, weight='cost')
+        return G        
+        
+    def get_hmdb_metabolites_with_data(self):
+        hmdb_id = self.metabolite_matcher.name_accessions.set_index('name')['hmdb_accession']
+        CCS = self.millan_2020.CCS
+        log2foldchange = self.millan_2020.log2fold_change
+
+        hmdb_log2fold_change_CSS = pd.DataFrame([hmdb_id, log2foldchange, CCS], index=['hmdb_accession', 'log2foldchange', 'CCS']).T.set_index('hmdb_accession')
+        hmdb_log2fold_change_CSS = hmdb_log2fold_change_CSS[hmdb_log2fold_change_CSS.index.notna()]
+        return hmdb_log2fold_change_CSS
+    
+    def get_non_duplicate_rows(self, hmdb_log2fold_change_CSS):
+        self.duplicated_ids = hmdb_log2fold_change_CSS[hmdb_log2fold_change_CSS.index.duplicated()].index
+        self.duplicated_ids_list = list(self.duplicated_ids)
+        non_duplicated = self.hmdb_log2fold_change_CSS.drop(self.duplicated_ids)
+        return non_duplicated
+
+    def get_rows_with_allowed_values(self, hmdb_log2fold_change_CSS, in_out='in'):
+        if in_out == 'in':
+            use = [CCS in self.allowed_ccs_values for CCS in hmdb_log2fold_change_CSS['CCS']]
+        elif in_out == 'out':
+            use = [CCS not in self.allowed_ccs_values for CCS in hmdb_log2fold_change_CSS['CCS']]
+            
+        rows_with_allowed_values = hmdb_log2fold_change_CSS.loc[use]
+        return rows_with_allowed_values
+
+    def get_metabolites_in_PPMI(self, hmdb_log2fold_change_CSS, in_out='in'):
+        hmdb_ids_in_both = self.match_exerc_metab_to_nodes(hmdb_log2fold_change_CSS, in_out)
+        return hmdb_log2fold_change_CSS.loc[hmdb_ids_in_both]
+    
+    def match_exerc_metab_to_nodes(self, hmdb_log2fold_change_CSS, in_out):
+        metabolites_in_PPMI_full = self.get_metabolite_nodes()
+        metabolites_in_exerc_metab = hmdb_log2fold_change_CSS.index
+        
+        df = pd.DataFrame([(metabolite, self.in_list(metabolite, metabolites_in_PPMI_full) ) for metabolite in metabolites_in_exerc_metab], columns=['hmdb_accession', 'in_interactome'])
+
+        if in_out=='in':
+            in_interactome = df[df['in_interactome']]
+            return list(in_interactome['hmdb_accession'])
+        elif in_out=='out':
+            not_in_interactome = df[~df['in_interactome']]
+            return list(not_in_interactome['hmdb_accession'])
+
+    def get_gene_from_synonym(self, synonym, gene_synonym_dict):
+        try:
+            return gene_synonym_dict[synonym]
+        except KeyError:
+            return None
+        
+    def remove_unmatched_proteins_from_full_PPMI(self):        
+        node_gene = self.protein_nodes_gene
+        unmatched_protein_nodes = list(node_gene[node_gene.isna()].index)
+        
+        for node in unmatched_protein_nodes:
+            if node in self.PPMI_full.nodes:
+                self.PPMI_full.remove_node(node)        
+        
+    def match_protein_nodes_to_gene(self):
+        gene_synonym_dict_file = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'protein matching', 'gene_synonym_dict.p')
+        gene_synonym_dict = du.read_from_pickle(gene_synonym_dict_file)
+
+        protein_class_file = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'Feature dfs pickle', 'protein_class.p')
+        protein_class_columns = du.read_from_pickle(protein_class_file)
+        
+        protein_nodes = pd.Series([node for node in list(self.PPMI_full.nodes) if not 'HMDB' in node])        
+        protein_node_in_index = pd.Series([protein_node in protein_class_columns.index for protein_node in protein_nodes])
+
+        protein_nodes_with_features = protein_nodes[protein_node_in_index]
+        protein_nodes_without_features = protein_nodes[~protein_node_in_index]
+        protein_matching_using_dict = pd.Series([self.get_gene_from_synonym(node, gene_synonym_dict) for node in protein_nodes_without_features], index=protein_nodes_without_features.index)
+
+        df_result = pd.DataFrame(protein_nodes, columns=['Node'])
+        df_result['Gene'] = [None]*len(protein_nodes)
+        df_result.loc[protein_nodes_with_features.index, 'Gene'] = protein_nodes_with_features
+        df_result.loc[protein_matching_using_dict.index, 'Gene'] = protein_matching_using_dict
+        df_result = df_result.set_index('Node')
+
+        return df_result['Gene']
+
+    def print_protein_names(self, list_of_proteins):
+        print("'"+"', '".join(list_of_proteins)+"'")
+        
+    def get_metabolite_nodes(self):
+        all_nodes = list(self.PPMI_full.nodes)
+        metabolites_in_PPMI = [m for m in all_nodes if 'HMDB' in m]
+        return metabolites_in_PPMI
+
+    def get_protein_nodes(self):
+        all_nodes = list(self.PPMI_pruned.nodes)
+        proteins_in_PPMI = [m for m in all_nodes if 'HMDB' not in m]
+        return proteins_in_PPMI
+    
+    def in_list(self, value, listing):
+        return value in listing
+
+    def target_distribution_stats(self):
+        df = pd.DataFrame([self.y.value_counts(), self.y.value_counts()/len(self.y)*100], index=['Amount', 'Percentage']).T
+        total = pd.DataFrame({"Amount": len(self.y),
+                 "Percentage": 100.}, index=["Total"])
+        df = df.append(total)
+        return df.style.format({'Amount': "{:.0f}", "Percentage": "{:.1f}%"})
+    
+    def print_settings(self):
+        print('calc_CCS_settings')
+        for k, v in self.millan_2020.calc_CCS_settings.items():
+            print(f"   {k}: '{v}'")
+        print('allowed CCS values')
+        print(f'   {self.allowed_ccs_values}')
+        
+        print('included feature categories')
+        for k, v in self.include_feature_category.items():
+            print(f"   {k}: '{v}'")
+        print('')
+
+    def drop_feature_columns_with_NaNs(self):
+        columns_with_NaNs = self.X.isna().sum()[self.X.isna().sum() > 0].index.to_list()
+        self.X = self.X.drop(columns_with_NaNs, axis=1)
+        
+    def construct_metabolite_feature_df(self, min_metabolite_per_feature=6):
+        metabolite_features_dfs_list = [] 
+
+        for feature_name, include in self.include_feature_category['metabolite'].items():
+            if include:
+                file_name = du.get_file_path(data_dir, 'HMDB metabolites', 'Feature dfs pickle', f'hmdb_metabolites_{feature_name}.p')
+                feature_df = du.read_from_pickle(file_name)
+                metabolite_features_dfs_list.append(feature_df)
+
+        metabolite_features_all_df = pd.concat(metabolite_features_dfs_list, axis=1)        
+        metabolite_features_df = metabolite_features_all_df.loc[self.hmdb_log2fold_change_CSS.index]
+        
+        #Remove those columns with only a single unique value
+        columns_with_single_unique_value = metabolite_features_df.columns[metabolite_features_df.nunique()==1]
+        metabolite_features_df = metabolite_features_df.drop(columns_with_single_unique_value, axis=1)
+        
+        correct_feature_column = np.array(pd.DataFrame(metabolite_features_df == 0).sum() >= min_metabolite_per_feature) & np.array(pd.DataFrame(metabolite_features_df == 1).sum() >= min_metabolite_per_feature)
+        float_columns = np.array(metabolite_features_df.dtypes == np.dtype('float64'))
+        columns_to_include = correct_feature_column | float_columns #correct feature column or float column 
+        
+        metabolite_features_df = metabolite_features_df.loc[:,columns_to_include]
+        
+        return metabolite_features_df
+    
+    def construct_protein_feature_df(self, min_proteins_per_feature=3):
+        protein_features_dfs_list = [] 
+
+        for feature_name, include in self.include_feature_category['protein'].items():
+            if include:
+                file_name = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'Feature dfs pickle', f'{feature_name}.p')
+                feature_df = du.read_from_pickle(file_name)
+                protein_features_dfs_list.append(feature_df)
+
+        protein_features_all_df = pd.concat(protein_features_dfs_list, axis=1)        
+        protein_features_df = protein_features_all_df.loc[self.protein_nodes_gene[self.get_protein_nodes()]]
+        
+        #Remove those columns with only a single unique value
+        columns_with_single_unique_value = protein_features_df.columns[protein_features_df.nunique()==1]
+        protein_features_df = protein_features_df.drop(columns_with_single_unique_value, axis=1)
+
+        protein_features_df = protein_features_df.loc[:,pd.DataFrame(protein_features_df == 0).sum() >= min_proteins_per_feature]
+        protein_features_df = protein_features_df.loc[:,pd.DataFrame(protein_features_df == 1).sum() >= min_proteins_per_feature]
+        
+        return protein_features_df
+    
+    def prune_PPMI_network(self, nodes, level=2):
+        G = self.PPMI_full
+        G_small = nx.Graph()
+        G_small.add_nodes_from(nodes)
+        for metabolite in nodes:
+            neighbors = list(G[metabolite])
+            edges = list(zip([metabolite] * len(neighbors), neighbors))
+            G_small.add_edges_from(edges) 
+
+            if level == 2:
+                G_small = self.add_neighbors(G, G_small, neighbors)
+        return G_small
+    
+    def add_neighbors(self, G_old, G_new, neighbors):
+        for neighbor in neighbors:
+            neighbor_neighbors = list(G_old[neighbor])
+            hmdb_neighbors = [node for node in neighbor_neighbors if 'HMDB' in node]
+            prot_neighbors = [node for node in neighbor_neighbors if not 'HMDB' in node]
+
+            neighbor_edges = list(zip([neighbor] * len(neighbor_neighbors), neighbor_neighbors))
+
+            hmdb_neighbor_edges = list(zip([neighbor] * len(hmdb_neighbors), hmdb_neighbors))
+            prot_neighbor_edges = list(zip([neighbor] * len(prot_neighbors), prot_neighbors))
+
+            G_new.add_nodes_from(prot_neighbors)
+            G_new.add_edges_from(prot_neighbor_edges)
+
+        return G_new
+    
+    def remove_isolated_nodes_from_full_PPMI(self):
+        nodes_to_remove = ['HMDB0000562', 'HMDB0001036', 'AOPEP', 'SLC47A1', 'SLC47A2', 'PRHOXNB']
+
+        for node in nodes_to_remove:
+            if node in self.PPMI_full.nodes:
+                self.PPMI_full.remove_node(node)
+    
+    def remove_isolated_nodes_from_pruned_PPMI(self):
+        nodes_to_remove = ['ALLC', 'HMDB0001209']
+
+        for node in nodes_to_remove:
+            if node in self.PPMI_pruned.nodes:
+                self.PPMI_pruned.remove_node(node)
+                if 'HMDB' in node:
+                    self.hmdb_log2fold_change_CSS = self.hmdb_log2fold_change_CSS.drop(node)
+                    
+    def print_components(self, G):
+        i = 1
+        for component in nx.connected_components(G):
+            print(f'  - component {i}: {len(component)} nodes')
+            if len(component) < 10:
+                print(component)
+            i+=1
+    
+    def print_data_counts(self):
+        print('Number of metabolites in publication Millan 2020:', len(self.millan_2020.log2fold_change))
+        print('Number of unnamed metabolites in publication Millan 2020:', len(self.metabolite_matcher.unnamed_metabolites))
+        
+        after_removing_unnamed = self.metabolite_matcher.name_accessions.set_index('name').drop(self.metabolite_matcher.unnamed_metabolites['name'])
+        print('Number of metabolites in publication Millan 2020 after removing unnamed:', after_removing_unnamed.shape[0])
+        
+        with_kegg_no_hmdb = after_removing_unnamed[after_removing_unnamed['hmdb_accession'].isna()]
+        print('Number of metabolites with KEGG id, without HMDB id:', with_kegg_no_hmdb.shape[0])
+        
+        print('Number of metabolites with HMDB id and data:', self.get_hmdb_metabolites_with_data().shape[0])
+        
+        print('Number of unique duplicated HMDB ids:', len(self.duplicated_ids.unique()))
+
+        print('Number of removed rows becuase target value was not allowed:', self.get_rows_with_allowed_values(self.get_hmdb_metabolites_with_data(), in_out='out').shape[0])
+        
+        print('Total number of metabolites in full PPMI:', len(self.get_metabolite_nodes()))
+        
+        print('Total number of metabolites with CCS and not in PPMI:', self.get_metabolites_in_PPMI(self.get_hmdb_metabolites_with_data(), in_out='out').shape[0])
+        
+        print('Number of metabolites with CCS data in full PPMI:', self.get_metabolites_in_PPMI(self.get_hmdb_metabolites_with_data()).shape[0])
+
+        print('')
+        
+        print('Number of valid metabolites with CCS data in full PPMI (y):', len(self.y))
+        
+        print('Number of metabolite feature columns (X):', self.X.shape[1])
+        
+    
+    def save_state(self):
+        filename = 'dataloader.p'        
+        file_path = du.get_file_path(data_dir, 'class based structure', 'dataloaders', filename)
+        du.dump_in_pickle(file_path, self)
+        
+
 
 class ExerciseMetabolomicsDataLoader():
     def __init__(self, publication, calc_CCS_settings=None):        
@@ -392,323 +681,5 @@ class MetaboliteNameMatcher():
         final_table = name_accessions.drop(unnamed_targets.index)
         return final_table 
     
-# millan_exercise_metabolomics_file = du.get_file_path(data_dir, 'Exercise metabolomics DB', 'millan', 'metabolites_change.csv')
-# millan_exercise_metabolomics = pd.read_csv(millan_exercise_metabolomics_file)
-# matcher = MetaboliteNameMatcher(millan_exercise_metabolomics['Metabolite'])
-
-class DataLoader():
-    def __init__(self, include_feature_category, metabolite_matcher_file=None, calc_CCS_settings=None, allowed_ccs_values=[-1, 0, 1], min_metabolite_per_feature=6, min_proteins_per_feature=3):
-        self.include_feature_category = include_feature_category
-        self.allowed_ccs_values = allowed_ccs_values
-        self.millan_2020 = ExerciseMetabolomicsDataLoader('millan', calc_CCS_settings)
-        
-        if metabolite_matcher_file is not None:
-            self.metabolite_matcher = du.read_from_pickle(metabolite_matcher_file)
-        else:
-            self.metabolite_matcher = MetaboliteNameMatcher(list(self.millan_2020.log2fold_change.index))
-            
-        self.hmdb_log2fold_change_CSS = self.get_hmdb_metabolites_with_data()
-        self.hmdb_log2fold_change_CSS = self.get_non_duplicate_rows(self.hmdb_log2fold_change_CSS)
-        self.hmdb_log2fold_change_CSS = self.get_rows_with_allowed_values(self.hmdb_log2fold_change_CSS)
-
-        self.PPMI_full = self.convert_interactome_to_graph(self.get_interactome())
-        self.remove_isolated_nodes_from_full_PPMI()
-        
-        self.protein_nodes_gene = self.match_protein_nodes_to_gene()
-        self.remove_unmatched_proteins_from_full_PPMI()
-            
-        self.hmdb_log2fold_change_CSS = self.get_metabolites_in_PPMI(self.hmdb_log2fold_change_CSS)
-        
-        self.PPMI_pruned = self.prune_PPMI_network(self.hmdb_log2fold_change_CSS.index)
-        self.remove_isolated_nodes_from_pruned_PPMI()
-        
-        self.y = self.hmdb_log2fold_change_CSS['CCS']
-        self.X = self.construct_metabolite_feature_df(min_metabolite_per_feature)
-        self.protein_features = self.construct_protein_feature_df(min_proteins_per_feature)
-        self.drop_feature_columns_with_NaNs()
-
-    def get_interactome(self):
-        prot_hmdb_interactome_file = du.get_file_path(data_dir, 'interactome', 'txt', 'prot_hmdb_interactome.txt')
-        prot_hmdb_interactome = pd.read_csv(prot_hmdb_interactome_file, sep="\t")
-        return prot_hmdb_interactome
-
-    def convert_interactome_to_graph(self, interactome):
-        G = nx.Graph()
-        nodes = np.unique(np.concatenate((interactome['protein1'].unique(), interactome['protein2'].unique())))
-        G.add_nodes_from(nodes)
-        edges = interactome[['protein1', 'protein2', 'cost']].values.tolist()
-        G.add_weighted_edges_from(edges, weight='cost')
-        return G        
-        
-    def get_hmdb_metabolites_with_data(self):
-        hmdb_id = self.metabolite_matcher.name_accessions.set_index('name')['hmdb_accession']
-        CCS = self.millan_2020.CCS
-        log2foldchange = self.millan_2020.log2fold_change
-
-        hmdb_log2fold_change_CSS = pd.DataFrame([hmdb_id, log2foldchange, CCS], index=['hmdb_accession', 'log2foldchange', 'CCS']).T.set_index('hmdb_accession')
-        hmdb_log2fold_change_CSS = hmdb_log2fold_change_CSS[hmdb_log2fold_change_CSS.index.notna()]
-        return hmdb_log2fold_change_CSS
-    
-    def get_non_duplicate_rows(self, hmdb_log2fold_change_CSS):
-        self.duplicated_ids = hmdb_log2fold_change_CSS[hmdb_log2fold_change_CSS.index.duplicated()].index
-        self.duplicated_ids_list = list(self.duplicated_ids)
-        non_duplicated = self.hmdb_log2fold_change_CSS.drop(self.duplicated_ids)
-        return non_duplicated
-
-    def get_rows_with_allowed_values(self, hmdb_log2fold_change_CSS, in_out='in'):
-        if in_out == 'in':
-            use = [CCS in self.allowed_ccs_values for CCS in hmdb_log2fold_change_CSS['CCS']]
-        elif in_out == 'out':
-            use = [CCS not in self.allowed_ccs_values for CCS in hmdb_log2fold_change_CSS['CCS']]
-            
-        rows_with_allowed_values = hmdb_log2fold_change_CSS.loc[use]
-        return rows_with_allowed_values
-
-    def get_metabolites_in_PPMI(self, hmdb_log2fold_change_CSS, in_out='in'):
-        hmdb_ids_in_both = self.match_exerc_metab_to_nodes(hmdb_log2fold_change_CSS, in_out)
-        return hmdb_log2fold_change_CSS.loc[hmdb_ids_in_both]
-    
-    def match_exerc_metab_to_nodes(self, hmdb_log2fold_change_CSS, in_out):
-        metabolites_in_PPMI_full = self.get_metabolite_nodes()
-        metabolites_in_exerc_metab = hmdb_log2fold_change_CSS.index
-        
-        df = pd.DataFrame([(metabolite, self.in_list(metabolite, metabolites_in_PPMI_full) ) for metabolite in metabolites_in_exerc_metab], columns=['hmdb_accession', 'in_interactome'])
-
-        if in_out=='in':
-            in_interactome = df[df['in_interactome']]
-            return list(in_interactome['hmdb_accession'])
-        elif in_out=='out':
-            not_in_interactome = df[~df['in_interactome']]
-            return list(not_in_interactome['hmdb_accession'])
-
-    def get_gene_from_synonym(self, synonym, gene_synonym_dict):
-        try:
-            return gene_synonym_dict[synonym]
-        except KeyError:
-            return None
-        
-    def remove_unmatched_proteins_from_full_PPMI(self):        
-        node_gene = self.protein_nodes_gene
-        unmatched_protein_nodes = list(node_gene[node_gene.isna()].index)
-        
-        for node in unmatched_protein_nodes:
-            if node in self.PPMI_full.nodes:
-                self.PPMI_full.remove_node(node)        
-        
-    def match_protein_nodes_to_gene(self):
-        gene_synonym_dict_file = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'protein matching', 'gene_synonym_dict.p')
-        gene_synonym_dict = du.read_from_pickle(gene_synonym_dict_file)
-
-        protein_class_file = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'Feature dfs pickle', 'protein_class.p')
-        protein_class_columns = du.read_from_pickle(protein_class_file)
-        
-        protein_nodes = pd.Series([node for node in list(self.PPMI_full.nodes) if not 'HMDB' in node])        
-        protein_node_in_index = pd.Series([protein_node in protein_class_columns.index for protein_node in protein_nodes])
-
-        protein_nodes_with_features = protein_nodes[protein_node_in_index]
-        protein_nodes_without_features = protein_nodes[~protein_node_in_index]
-        protein_matching_using_dict = pd.Series([self.get_gene_from_synonym(node, gene_synonym_dict) for node in protein_nodes_without_features], index=protein_nodes_without_features.index)
-
-        df_result = pd.DataFrame(protein_nodes, columns=['Node'])
-        df_result['Gene'] = [None]*len(protein_nodes)
-        df_result.loc[protein_nodes_with_features.index, 'Gene'] = protein_nodes_with_features
-        df_result.loc[protein_matching_using_dict.index, 'Gene'] = protein_matching_using_dict
-        df_result = df_result.set_index('Node')
-
-        return df_result['Gene']
-
-    def print_protein_names(self, list_of_proteins):
-        print("'"+"', '".join(list_of_proteins)+"'")
-        
-    def get_metabolite_nodes(self):
-        all_nodes = list(self.PPMI_full.nodes)
-        metabolites_in_PPMI = [m for m in all_nodes if 'HMDB' in m]
-        return metabolites_in_PPMI
-
-    def get_protein_nodes(self):
-        all_nodes = list(self.PPMI_pruned.nodes)
-        proteins_in_PPMI = [m for m in all_nodes if 'HMDB' not in m]
-        return proteins_in_PPMI
-    
-    def in_list(self, value, listing):
-        return value in listing
-
-    def target_distribution_stats(self):
-        df = pd.DataFrame([self.y.value_counts(), self.y.value_counts()/len(self.y)*100], index=['Amount', 'Percentage']).T
-        total = pd.DataFrame({"Amount": len(self.y),
-                 "Percentage": 100.}, index=["Total"])
-        df = df.append(total)
-        return df.style.format({'Amount': "{:.0f}", "Percentage": "{:.1f}%"})
-    
-    def print_settings(self):
-        print('calc_CCS_settings')
-        for k, v in self.millan_2020.calc_CCS_settings.items():
-            print(f"   {k}: '{v}'")
-        print('allowed CCS values')
-        print(f'   {self.allowed_ccs_values}')
-        
-        print('included feature categories')
-        for k, v in self.include_feature_category.items():
-            print(f"   {k}: '{v}'")
-        print('')
-
-    def drop_feature_columns_with_NaNs(self):
-        columns_with_NaNs = self.X.isna().sum()[self.X.isna().sum() > 0].index.to_list()
-        self.X = self.X.drop(columns_with_NaNs, axis=1)
-        
-    def construct_metabolite_feature_df(self, min_metabolite_per_feature=6):
-        metabolite_features_dfs_list = [] 
-
-        for feature_name, include in self.include_feature_category['metabolite'].items():
-            if include:
-                file_name = du.get_file_path(data_dir, 'HMDB metabolites', 'Feature dfs pickle', f'hmdb_metabolites_{feature_name}.p')
-                feature_df = du.read_from_pickle(file_name)
-                metabolite_features_dfs_list.append(feature_df)
-
-        metabolite_features_all_df = pd.concat(metabolite_features_dfs_list, axis=1)        
-        metabolite_features_df = metabolite_features_all_df.loc[self.hmdb_log2fold_change_CSS.index]
-        
-        #Remove those columns with only a single unique value
-        columns_with_single_unique_value = metabolite_features_df.columns[metabolite_features_df.nunique()==1]
-        metabolite_features_df = metabolite_features_df.drop(columns_with_single_unique_value, axis=1)
-        
-        correct_feature_column = np.array(pd.DataFrame(metabolite_features_df == 0).sum() >= min_metabolite_per_feature) & np.array(pd.DataFrame(metabolite_features_df == 1).sum() >= min_metabolite_per_feature)
-        float_columns = np.array(metabolite_features_df.dtypes == np.dtype('float64'))
-        columns_to_include = correct_feature_column | float_columns #correct feature column or float column 
-        
-        metabolite_features_df = metabolite_features_df.loc[:,columns_to_include]
-        
-        return metabolite_features_df
-    
-    def construct_protein_feature_df(self, min_proteins_per_feature=3):
-        protein_features_dfs_list = [] 
-
-        for feature_name, include in self.include_feature_category['protein'].items():
-            if include:
-                file_name = du.get_file_path(data_dir, 'ProteinAtlas proteins', 'Feature dfs pickle', f'{feature_name}.p')
-                feature_df = du.read_from_pickle(file_name)
-                protein_features_dfs_list.append(feature_df)
-
-        protein_features_all_df = pd.concat(protein_features_dfs_list, axis=1)        
-        protein_features_df = protein_features_all_df.loc[self.protein_nodes_gene[self.get_protein_nodes()]]
-        
-        #Remove those columns with only a single unique value
-        columns_with_single_unique_value = protein_features_df.columns[protein_features_df.nunique()==1]
-        protein_features_df = protein_features_df.drop(columns_with_single_unique_value, axis=1)
-
-        protein_features_df = protein_features_df.loc[:,pd.DataFrame(protein_features_df == 0).sum() >= min_proteins_per_feature]
-        protein_features_df = protein_features_df.loc[:,pd.DataFrame(protein_features_df == 1).sum() >= min_proteins_per_feature]
-        
-        return protein_features_df
-    
-    def prune_PPMI_network(self, nodes, level=2):
-        G = self.PPMI_full
-        G_small = nx.Graph()
-        G_small.add_nodes_from(nodes)
-        for metabolite in nodes:
-            neighbors = list(G[metabolite])
-            edges = list(zip([metabolite] * len(neighbors), neighbors))
-            G_small.add_edges_from(edges) 
-
-            if level == 2:
-                G_small = self.add_neighbors(G, G_small, neighbors)
-        return G_small
-    
-    def add_neighbors(self, G_old, G_new, neighbors):
-        for neighbor in neighbors:
-            neighbor_neighbors = list(G_old[neighbor])
-            hmdb_neighbors = [node for node in neighbor_neighbors if 'HMDB' in node]
-            prot_neighbors = [node for node in neighbor_neighbors if not 'HMDB' in node]
-
-            neighbor_edges = list(zip([neighbor] * len(neighbor_neighbors), neighbor_neighbors))
-
-            hmdb_neighbor_edges = list(zip([neighbor] * len(hmdb_neighbors), hmdb_neighbors))
-            prot_neighbor_edges = list(zip([neighbor] * len(prot_neighbors), prot_neighbors))
-
-            G_new.add_nodes_from(prot_neighbors)
-            G_new.add_edges_from(prot_neighbor_edges)
-
-        return G_new
-    
-    def remove_isolated_nodes_from_full_PPMI(self):
-        nodes_to_remove = ['HMDB0000562', 'HMDB0001036', 'AOPEP', 'SLC47A1', 'SLC47A2', 'PRHOXNB']
-
-        for node in nodes_to_remove:
-            if node in self.PPMI_full.nodes:
-                self.PPMI_full.remove_node(node)
-    
-    def remove_isolated_nodes_from_pruned_PPMI(self):
-        nodes_to_remove = ['ALLC', 'HMDB0001209']
-
-        for node in nodes_to_remove:
-            if node in self.PPMI_pruned.nodes:
-                self.PPMI_pruned.remove_node(node)
-                if 'HMDB' in node:
-                    self.hmdb_log2fold_change_CSS = self.hmdb_log2fold_change_CSS.drop(node)
-                    
-    def print_components(self, G):
-        i = 1
-        for component in nx.connected_components(G):
-            print(f'  - component {i}: {len(component)} nodes')
-            if len(component) < 10:
-                print(component)
-            i+=1
-    
-    def print_data_counts(self):
-        print('Number of metabolites in publication Millan 2020:', len(self.millan_2020.log2fold_change))
-        print('Number of unnamed metabolites in publication Millan 2020:', len(self.metabolite_matcher.unnamed_metabolites))
-        
-        after_removing_unnamed = self.metabolite_matcher.name_accessions.set_index('name').drop(self.metabolite_matcher.unnamed_metabolites['name'])
-        print('Number of metabolites in publication Millan 2020 after removing unnamed:', after_removing_unnamed.shape[0])
-        
-        with_kegg_no_hmdb = after_removing_unnamed[after_removing_unnamed['hmdb_accession'].isna()]
-        print('Number of metabolites with KEGG id, without HMDB id:', with_kegg_no_hmdb.shape[0])
-        
-        print('Number of metabolites with HMDB id and data:', self.get_hmdb_metabolites_with_data().shape[0])
-        
-        print('Number of unique duplicated HMDB ids:', len(self.duplicated_ids.unique()))
-
-        print('Number of removed rows becuase target value was not allowed:', self.get_rows_with_allowed_values(self.get_hmdb_metabolites_with_data(), in_out='out').shape[0])
-        
-        print('Total number of metabolites in full PPMI:', len(self.get_metabolite_nodes()))
-        
-        print('Total number of metabolites with CCS and not in PPMI:', self.get_metabolites_in_PPMI(self.get_hmdb_metabolites_with_data(), in_out='out').shape[0])
-        
-        print('Number of metabolites with CCS data in full PPMI:', self.get_metabolites_in_PPMI(self.get_hmdb_metabolites_with_data()).shape[0])
-
-        print('')
-        
-        print('Number of valid metabolites with CCS data in full PPMI (y):', len(self.y))
-        
-        print('Number of metabolite feature columns (X):', self.X.shape[1])
-        
-    
-    def save_state(self):
-        filename = 'dataloader.p'        
-        file_path = du.get_file_path(data_dir, 'class based structure', 'dataloaders', filename)
-        du.dump_in_pickle(file_path, self)
-        
-
-# calc_CCS_settings = {'method': 'naive', 
-#                      'p_value': 0.1}
-
-# allowed_ccs_values = [-1, 0, 1]
-
-# include_feature_category = {'molecular_weight': True,
-#                             'state': True,
-#                             'kingdom': True,
-#                             'super_class': True,
-#                             'class': True,
-#                             'direct_parent': True,
-#                             'molecular_framework': True,
-#                             'alternative_parents': True,
-#                             'substituents': True,
-#                             'external_descriptors': True,
-#                             'cellular_locations': True,
-#                             'biospecimen_locations': True,
-#                             'tissue_locations': True}
-    
-# dataloader = DataLoader(include_feature_category, calc_CCS_settings=calc_CCS_settings, allowed_ccs_values=allowed_ccs_values)
-# dataloader.print_data_counts()
-# dataloader.target_distribution_stats()
-# dataloader.save_state()
+class InputError(Exception):
+    pass

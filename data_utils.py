@@ -2,8 +2,6 @@ import os
 import pickle
 from pathlib import Path
 
-dir_data_basename = 'Programming'
-
 def cur_dir():
     return Path().parent.absolute()
 
