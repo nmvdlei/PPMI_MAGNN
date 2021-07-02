@@ -9,35 +9,82 @@ import data_utils as du
 data_dir = du.find_data_dir('app')
 warnings.filterwarnings("ignore")
 
+#######################################################################################################################################################################
+
+# Heterogeneous graph representation learning for protein-protein-metabolite interaction networks
+
+# This script contains 3 classes: 
+#   1. DataLoader
+#   2. ExerciseMetabolomicsDataLoader
+#   3. MetaboliteNameMatcher
+
+#######################################################################################################################################################################
+
 class DataLoader():
-    def __init__(self, include_feature_category, metabolite_matcher_file=None, calc_CCS_settings=None, allowed_ccs_values=[-1, 0, 1], min_metabolite_per_feature=6, min_proteins_per_feature=3):
+    """ This class preprocesses all data required to apply HGRL to a PPMI network. The calculations happen at initalization.
+        Finally, the data of interest is the 4 data components:
+          1. PPMI network: self.PPMI_pruned
+          2. Metabolite attributes: self.X
+          3. Protein attributes: self.protein_features
+          4. Metabolite class labels: self.y
+    """
+    def __init__(self, publication_names, include_feature_category, metabolite_matcher_file=None, calc_CCS_settings=None, allowed_ccs_values=[-1, 0, 1], min_metabolite_per_feature=6, min_proteins_per_feature=3):
+        #Store preprocessing settings 
         self.include_feature_category = include_feature_category
         self.allowed_ccs_values = allowed_ccs_values
-        self.millan_2020 = ExerciseMetabolomicsDataLoader('millan', calc_CCS_settings)
+        self.publication_names = publication_names
         
+        #Obtain CCS data for specific publication(s)
+        publications = []
+        for publication_name in self.publication_names:
+            publications.append(ExerciseMetabolomicsDataLoader(publication_name, calc_CCS_settings))
+            
+        self.millan_2020 = publications[0]
+        
+        #Load or create metabolite matcher file to obtain HMDB IDs for each datapoint        
+        #The metabolite matcher takes a list of metabolite names as input and tries to find HMDB and KEGG ids for each string 
         if metabolite_matcher_file is not None:
             self.metabolite_matcher = du.read_from_pickle(metabolite_matcher_file)
         else:
             self.metabolite_matcher = MetaboliteNameMatcher(list(self.millan_2020.log2fold_change.index))
-            
+        
+        #hmdb_log2fold_change_CSS is a pandas DataFrame with 2 columns. The row index is HMDB accesion IDs. The 2 columns are mean log2fold change and CCS 
         self.hmdb_log2fold_change_CSS = self.get_hmdb_metabolites_with_data()
+        
+        #It may be the case (due to metabolite name matching) that duplicate HMDB IDs are identified. 
+        #Since it is hard to make a decision on which version of duplicate IDs' data to trust, all duplicates are removed
         self.hmdb_log2fold_change_CSS = self.get_non_duplicate_rows(self.hmdb_log2fold_change_CSS)
+        
+        #Uses may decide to use only [-1, 1] or all [-1, 0, 1] to make the classification problem setting binary or multi class
         self.hmdb_log2fold_change_CSS = self.get_rows_with_allowed_values(self.hmdb_log2fold_change_CSS)
 
+        #The PPMI_full is a networkx graph and may be constructed from a pandas DataFrame with edges
+        #Edge weights are still included in this step of the process, but are omitted later on.
         self.PPMI_full = self.convert_interactome_to_graph(self.get_interactome())
         self.remove_isolated_nodes_from_full_PPMI()
         
+        #Only protein nodes with attribute information should be included
+        #protein_nodes_gene is a pandas Series which lists the Gene Symbol / Entrez ID for each node if it was found
+        #Some 583 nodes from the PPMI were removed due to this criterium
         self.protein_nodes_gene = self.match_protein_nodes_to_gene()
         self.remove_unmatched_proteins_from_full_PPMI()
-            
-        self.hmdb_log2fold_change_CSS = self.get_metabolites_in_PPMI(self.hmdb_log2fold_change_CSS)
         
+        #Only metabolites for which CCS data is available and that exist in the full PPMI should be included in the pruned PPMI
+        #The pruning process is described in preprocess_PPMI.ipynb and the thesis manuscript
+        #The main goal of the pruning process is to have target class labels for all metabolite nodes in the network and to reduce network size as much as possible for reducing computational cost
+        self.hmdb_log2fold_change_CSS = self.get_metabolites_in_PPMI(self.hmdb_log2fold_change_CSS)
         self.PPMI_pruned = self.prune_PPMI_network(self.hmdb_log2fold_change_CSS.index)
         self.remove_isolated_nodes_from_pruned_PPMI()
         
+        #With the PPMI network pruned and the set of metabolites and proteins defined, the target class labels and attribute matrices can be constructed
+        #y is the target class label. This work could be extended to allow for regression and the mean log2fold change could be used 
+        #The self.include_feature_category are used for this
         self.y = self.hmdb_log2fold_change_CSS['CCS']
         self.X = self.construct_metabolite_feature_df(min_metabolite_per_feature)
         self.protein_features = self.construct_protein_feature_df(min_proteins_per_feature)
+        
+        #Since NaN values in attribute matrices cause problems in the HGRL algorithms and classifiers, these columns are removed. 
+        #Mostly the physical properties features of metabolites are affected by this, as these values are unavailable from some/most metabolites 
         self.drop_feature_columns_with_NaNs()
 
     def get_interactome(self):
@@ -244,6 +291,7 @@ class DataLoader():
         return G_new
     
     def remove_isolated_nodes_from_full_PPMI(self):
+        #The specific nodes below are isolted nodes that are not connected to any of the other nodes in the full PPMI network and are removed
         nodes_to_remove = ['HMDB0000562', 'HMDB0001036', 'AOPEP', 'SLC47A1', 'SLC47A2', 'PRHOXNB']
 
         for node in nodes_to_remove:
@@ -251,6 +299,7 @@ class DataLoader():
                 self.PPMI_full.remove_node(node)
     
     def remove_isolated_nodes_from_pruned_PPMI(self):
+        #By pruning the PPMI network this pair of nodes becomes isolated and is therefore also removed
         nodes_to_remove = ['ALLC', 'HMDB0001209']
 
         for node in nodes_to_remove:
@@ -260,6 +309,7 @@ class DataLoader():
                     self.hmdb_log2fold_change_CSS = self.hmdb_log2fold_change_CSS.drop(node)
                     
     def print_components(self, G):
+        #To check the connectedness of nodes the connected components can be printed seperately. This can be done for the full or pruned PPMI
         i = 1
         for component in nx.connected_components(G):
             print(f'  - component {i}: {len(component)} nodes')
@@ -300,27 +350,50 @@ class DataLoader():
         filename = 'dataloader.p'        
         file_path = du.get_file_path(data_dir, 'class based structure', 'dataloaders', filename)
         du.dump_in_pickle(file_path, self)
-        
+
+
+#######################################################################################################################################################################
+
+#######################################################################################################################################################################
 
 
 class ExerciseMetabolomicsDataLoader():
-    def __init__(self, publication, calc_CCS_settings=None):        
+    """This class can be used to obtain concentration change sign (CCS) data per metabolite for a specific publication. 
+       This class can be further extended to generalize better to other publications
+       Instructions need to be made for the input of custom data
+    """
+    def __init__(self, publication, calc_CCS_settings=None):
+        #Based on the name of the publication, the correct source data files are identified and imported into the class object 
         self.source_data_files = self.get_source_file_locations(publication)
         self.blood, self.subjectFeatures, self.conditions = self.read_source_files()
+        
+        #Multiple experiments may be perfoemed on one subject in a metabolomics experiment and the identification of measuremnts and conditions is captured here 
         self.subjectID_conditionIDs = self.get_conditionIDs_per_subjectID()
         
+        #Researchers may report metabolite names instead of metabolite IDs, these then need to be matched to IDs
         self.metabolite_names = self.blood.columns
         
+        #The pre and post matrices contain abundance values per metabolite per subject 
         self.pre, self.post = self.get_pre_post_blood_values()
+        
+        #The log2fold change matrix contains log2fold change values per metabolite and per subject
+        #A log2fold change value is easy to interpret, as a value of -1 means halving of abundance, and a value of 1 means a doubling in abundance.
         self.log2fold_change_matrix = self.calc_log2fold_change_matrix()
+        
+        #The log2fold change mtrix can be averaged across subjects to obtain the mean log2fold_change per metabolite
         self.log2fold_change = self.calc_log2fold_change()
         
+        #Based on the mean log2fold_change, concentration change sign (CCS) can be obtained.
+        #There are different methods of doing this. In the research, the naive method with p=0.1 is used for approximately equal class distribution. 
+        #If no setting is specified the default setting from the research is used
         if type(calc_CCS_settings)==dict:
             self.calc_CCS_settings = calc_CCS_settings
         else:
             self.calc_CCS_settings = self.get_default_calc_CCS_settings()
         
+        #Given the settings, the CCS values are obtained
         self.CCS = self.calc_CCS()
+        
         
     def get_source_file_locations(self, publication):
         if publication=='millan':
@@ -411,41 +484,67 @@ class ExerciseMetabolomicsDataLoader():
             filename = f'sportomics--{change_type}--{from_id}--{till_id}.png'
             plt.savefig(Path('Figures', filename), bbox_inches='tight')
         plt.show()
-    
-    
-# millan_2020 = ExerciseMetabolomicsDataLoader('millan')
-# millan_2020.CCS
 
+#######################################################################################################################################################################
+
+#######################################################################################################################################################################
+
+        
 class MetaboliteNameMatcher():
+    """This class can take in a list of metabolite names and will create a matrix of matched HMDB_IDs and KEGG_IDs
+       All calculations are performed at intialisation. It uses multiple data components to perform the match:
+          - hmdb_accession_synonyms: This is a list of dicts per HMDB metabolite. Each dict has HMDB ID, HMDB name and HMDB synonyms 
+          - hmdb_secondary_accessions: This is a list of dicts per HMDB metabolite. Each dict has HMDB ID and HMDB secondary accessions.  
+          - kegg_compounds: This is a list of dicts per KEGG compound. Each dict has compound names 
+          - compound_cmpdID: This is a datafile specific to the San-Millan (2020) publication with known HMDB/KEGG IDs per metabolite name
+          - kegg_to_hmdb: pandas DataFrame with 2 columns: KEGG ID and HMDB ID. Used to obtain unknown HMDB IDs for known KEGG compounds.
+          
+        The class can also be initialized with name_accessions and conversion_table already created but with some additional matching to be performed.
+        The class could be further extended to deal with the hmdb_secondary_accessions too
+    """
     def __init__(self, metabolite_names_list, name_accessions=None, conversion_table=None):
+        #The Source files structure depends on the data_utils.py functionality
+        #It assumes the data is stored in a "Data" folder as described in the README of this repository
         self.source_files = self.get_source_files()
-        self.hmdb_accession_synonyms, self.kegg_compounds, self.compound_cmpdID, self.kegg_to_hmdb = self.import_source_files()
+        self.hmdb_accession_synonyms, self.hmdb_secondary_accessions, self.kegg_compounds, self.compound_cmpdID, self.kegg_to_hmdb = self.import_source_files()
 
+        #The metabolite_names_list is the target list of strings to be converted to IDs
         self.metabolite_names_list = metabolite_names_list
-        self.conversion_table = conversion_table        
+
+        #The conversion table is a dictionary that can be used to match specific strings to specific known IDs/strings
+        #The goal here is to keep the functionality general and applicable for other metabolite names lists too
+        self.conversion_table = conversion_table
+        
+        #The name accessions is the target pandas DataFrame that we'd like to have as complete and filled as possible. 
+        #Rows in the name_accessions df represent metabolite name strings to match, the first column is HMDB IDs and the second column is KEGG ID 
         if type(name_accessions) == pd.DataFrame:
             self.name_accessions = name_accessions
         else:
             self.name_accessions = self.obtain_name_accessions() 
                 
+        #Any row for which neither HMDB nor KEGG ID was found is an unnamed metabolite
         self.unnamed_metabolites = self.create_unnamed_metabolites_table()
-        
+
+        #For the San-Millan (2020) publication, HMDB or KEGG IDs are listed per metabolite string. Where required this knowledge is used to create a conversion table. 
         self.conversion_table = self.extend_conversion_table()
         
+        #If there are items in the conversion table, the matching process is repeated with the conversion table included to optimize metabolite identification recall
         if len(self.conversion_table) > 0:
             self.name_accessions = self.obtain_name_accessions() 
             self.unnamed_metabolites = self.create_unnamed_metabolites_table()
         
+        #In a final step the self.kegg_to_hmdb is used to impute all unknown HMDB IDs based on known KEGG IDs. This yields additional HMDB IDs.
         self.imput_hmdb_id_from_kegg()
             
     def get_source_files(self):
         hmdb_metabolites_synonyms_file = du.get_file_path(data_dir, 'HMDB metabolites', 'Parsed pickle', 'hmdb_metabolites_synonyms.p')
+        hmdb_metabolites_secondary_accessions_file = du.get_file_path(data_dir, 'HMDB metabolites', 'Parsed pickle', 'hmdb_metabolites_secondary_accessions.p')
         kegg_compounds_pickle_file = du.get_file_path(data_dir, 'Kegg compounds', 'pickle', 'kegg_compounds.p')
         compound_cmpdID_file = du.get_file_path(data_dir, 'Exercise metabolomics DB', 'millan', 'compound_cmpdID.csv')
         metabolite_kegg_to_hmdb_file = du.get_file_path(data_dir, 'HMDB metabolites', 'Parsed pickle', 'kegg_id_to_hmdb_id.p')
-
         
         source_files = {'hmdb_synonyms': hmdb_metabolites_synonyms_file,
+                        'hmdb_secondary_accessions': hmdb_metabolites_secondary_accessions_file,
                         'kegg_compounds': kegg_compounds_pickle_file,
                         'compound_cmpdID': compound_cmpdID_file,
                         'kegg_to_hmdb': metabolite_kegg_to_hmdb_file}
@@ -453,13 +552,17 @@ class MetaboliteNameMatcher():
     
     def import_source_files(self):
         hmdb_accession_synonyms = du.read_from_pickle(self.source_files['hmdb_synonyms'])
+        hmdb_secondary_accessions = du.read_from_pickle(self.source_files['hmdb_secondary_accessions'])
         kegg_compounds = du.read_from_pickle(self.source_files['kegg_compounds'])
         compound_cmpdID = pd.read_csv(self.source_files['compound_cmpdID'])
         kegg_to_hmdb = du.read_from_pickle(self.source_files['kegg_to_hmdb'])
         
-        return hmdb_accession_synonyms, kegg_compounds, compound_cmpdID, kegg_to_hmdb
+        return hmdb_accession_synonyms, hmdb_secondary_accessions, kegg_compounds, compound_cmpdID, kegg_to_hmdb
 
     def obtain_name_accessions(self):
+        """This function is important logic for this class:
+        For each string metabolite name in self.metabolite_names_list it will try to obtain HMDB ID and KEGG ID independently. 
+        The results per string, even if they are not found are stored in the name_accessions pandas DataFrame"""
         hmdb_accessions = [self.find_hmdb_accession(self.hmdb_accession_synonyms, name) for name in self.metabolite_names_list]
         kegg_accessions = [self.find_kegg_accession(self.kegg_compounds, name) for name in self.metabolite_names_list]
         kegg_accessions_stripped = [kegg_accession[4:] if kegg_accession != None else None for kegg_accession in list(kegg_accessions)]
