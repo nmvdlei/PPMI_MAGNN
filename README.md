@@ -72,7 +72,7 @@ A: Some relevant code snippets are mentioned here:
 - `data_utils.py` is a utility script that allows for the `Data` folder to be outside the repository for easier collaboration and data sharing
 
 **Q: How does the data preprocessing work?** <br>
-A: The preprocessing happens at initalization of a `DataLoader` object in `PPMI_dataloader.py`. Depending on some preprocessing settings the correct data is retrieved, combined and stored in the `DataLoader` class. The picture below illustrates the preprocessing procedures.
+A: Some preliminary data conversions were already done beforehand and the code for these conversion operations is available in `data_engineering` subfolders. Most preprocessing happens at initalization of a `DataLoader` object in `PPMI_dataloader.py`. Depending on some preprocessing settings the correct data is retrieved, combined and stored in the `DataLoader` class. The picture below illustrates the full preprocessing procedures, of which some happen in `data_engineering` and most happen in `DataLoader`. 
 
 ![](images/preprocessing_workflow.png)
 
