@@ -15,8 +15,8 @@ The implementation proposed in this work uses 4 data components:
 
 ### Experimental setup
 
-|   Method      | Uses PPMI network | Uses metabolite attributes | Uses protein attributes | Uses node class labels |
-|--------------:|:-----------------:|:--------------------------:|:--------------------:|:----------------------:|
+|   Method / Usage    | Uses PPMI network | Uses metabolite attributes | Uses protein attributes | Uses node class labels |
+|-----------------:|:-----------------:|:--------------------------:|:--------------------:|:----------------------:|
 | **Baselines** |                   |              x             |                      |            x           |
 |  **MAGNN 1**  |         x         |                            |                      |            x           |
 |  **MAGNN 2**  |         x         |              x             |                      |            x           |
