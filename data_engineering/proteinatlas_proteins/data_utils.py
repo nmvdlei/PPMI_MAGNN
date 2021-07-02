@@ -2,7 +2,8 @@ import os
 import pickle
 from pathlib import Path
 
-dir_data_basename = 'Programming'
+
+### This utility script helps to deal with a Data folder in the same parent directory as the PPMI MAGNN repository ###
 
 def cur_dir():
     return Path().parent.absolute()

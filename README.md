@@ -69,6 +69,7 @@ A: Some relevant code snippets are mentioned here:
 - The `load_PPMI_data` function in `utils/data.py` is build to load data into MAGNN specific format.
 - The `evaluate_results_nc` function in `utils/tools.py` is used to evaluate performance
 - The relational rotation encoder is used when `--rnn-type RotatE0` is used in `run_PPMI.py`. The actual usage is implemented in the `forward` function in the `MAGNN_metapath_specific` class in `model/base_MAGNN.py`. This functionality allows metapath instance specific information like protein attributes to be included in the training process.
+- `data_utils.py` is a utility script that allows for the `Data` folder to be outside the repository for easier collaboration and data sharing
 
 **Q: How does the data preprocessing work?** <br>
 A: The preprocessing happens at initalization of a `DataLoader` object in `PPMI_dataloader.py`. Depending on some preprocessing settings the correct data is retrieved, combined and stored in the `DataLoader` class. The picture below illustrates the preprocessing procedures.
