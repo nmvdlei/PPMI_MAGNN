@@ -1,10 +1,10 @@
-## Heterogeneous graph representation learning on protein-protein-metabolite interaction networks
+# Heterogeneous graph representation learning on protein-protein-metabolite interaction networks
 
 This repository provides an implementation of [MAGNN](https://github.com/cynricfu/MAGNN) applied to the metabolite concentration change sign prediction task as described in the masters thesis manuscript by Nathan van der Lei, MSc Computational Science, UvA/VU, Amsterdam. This repository was developed in collaboration with the [Fraenkel Lab](http://fraenkel.mit.edu/), Department of Biological Engineering, MIT.
 
 The thesis manuscript itself will become available at [Theses University of Amsterdam](https://scripties.uba.uva.nl)
 
-### Project overview
+## Project overview
 The implementation proposed in this work uses 4 data components:
 1. **PPMI network**: under active development at the [Fraenkel Lab](https://github.com/fraenkel-lab)
 2. **Metabolite attributes**: with data from [HMDB 4.0 download](https://hmdb.ca/downloads)
@@ -13,7 +13,7 @@ The implementation proposed in this work uses 4 data components:
 
 ![](images/methods_overview.png)
 
-### Experimental setup
+## Experimental setup
 
 |   Methods / Data components   | Uses PPMI network | Uses metabolite attributes | Uses protein attributes | Uses node class labels |
 |-----------------:|:-----------------:|:--------------------------:|:--------------------:|:----------------------:|
@@ -22,7 +22,7 @@ The implementation proposed in this work uses 4 data components:
 |  **MAGNN 2**  |         x         |              x             |                      |            x           |
 |  **MAGNN 3**  |         x         |              x             |           x          |            x           |
 
-### Data download
+## Data download
 1. Download "Data.zip" folder from [Dropbox](https://www.dropbox.com/s/iikwrukbtwg8l2n/Data.zip?dl=0)
 2. Unzip "Data.zip" to the same parent directory as this repository
 3. Your file structure should look as intended:
@@ -32,7 +32,7 @@ The implementation proposed in this work uses 4 data components:
     - 📁 PPMI_MAGNN
     - ...  
 
-### Usage
+## Usage
 1. Download data (as described previously)
 2. Use `preprocess_PPMI.ipynb` to prepare data for MAGNN and create / load a `Dataloader` object
 3. Use `data_analysis.ipynb` to investigate the PPMI network, metabolite attributes, protein attributes, metabolite class labels
@@ -44,7 +44,7 @@ The implementation proposed in this work uses 4 data components:
 
 Run `python run_PPMI.py --help` for more information about the available options of the PPMI MAGNN implementation. 
 
-### Dependencies
+## Dependencies
 
 Recent versions of the following packages for Python 3 are required:
 * PyTorch 1.2.0
@@ -55,7 +55,7 @@ Recent versions of the following packages for Python 3 are required:
 * SciPy 1.3.1
 * matplotlib_venn
 
-### QA
+## QA
 
 **Q: What is this whole project about?** <br>
 A: Metabolites are small molecules that interact in biochemical pathways. The metabolomics research field studies metabolites and is challenged with data engineering challenges. There are a lot of metabolites to be found in human biofluids like blood. Experimental results usually only report a small fraction of all metabolites, due to limitations in MS and NMR based measurements techniques. This project aims to predict unknown properties of metabolites that weren't measured in an experiment but could be infered from their known attributes and their role in known protein-protein-metabolite interaction networks. For this reason, heterogenous graph representation learning techniques in the form of the MAGNN algorithm are applied. Please read the thesis manuscript to better understand the challenges and nuances of this project.
@@ -103,7 +103,7 @@ A: In the `model` folder there are different versions of the MAGNN model, becaus
 
 This work uses the latter `MAGNN_nc_mb` for node classification and working in batches.
 
-**Q: How to cite this work?**
+**Q: How to cite this work?** <br>
 A: if you find this work useful, please consider citing:
 
     @MastersThesis{vanderlei_2021_heterogeneous,
@@ -112,7 +112,7 @@ A: if you find this work useful, please consider citing:
         school={University of Amsterdam}
         year={2021}}  
 
-### Resources
+## Resources
 
 - Sportomics publication used to obtain metabolite class labels:
 > Metabolomics of Endurance Capacity in World Tour Professional Cyclists <br>
@@ -128,6 +128,8 @@ A: if you find this work useful, please consider citing:
 
 <!-- - [Markdown-cheat-sheet](https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet)
 - [Emoji-cheat-sheet](https://github.com/ikatyang/emoji-cheat-sheet) -->
+
+## MAGNN specifics
 
 ### Other benchmark datasets
 
