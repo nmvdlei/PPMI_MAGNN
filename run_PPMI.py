@@ -183,12 +183,12 @@ def run_model_PPMI(feats_type, hidden_dim, num_heads, attn_vec_dim, rnn_type,
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description='MRGNN testing for the PPMI dataset')
-    ap.add_argument('--feats-type', type=int, default=2,
+    ap.add_argument('--feats-type', type=int, default=0,
                     help='Type of the node features used. ' +
                          '0 - loaded features; ' +
                          '1 - only target node features (zero vec for others); ' +
                          '2 - only target node features (id vec for others); ' +
-                         '3 - all id vec. Default is 2.')
+                         '3 - all id vec. Default is 0.')
     ap.add_argument('--hidden-dim', type=int, default=64, help='Dimension of the node hidden state. Default is 64.')
     ap.add_argument('--num-heads', type=int, default=8, help='Number of the attention heads. Default is 8.')
     ap.add_argument('--attn-vec-dim', type=int, default=128, help='Dimension of the attention vector. Default is 128.')
