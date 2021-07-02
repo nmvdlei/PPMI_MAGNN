@@ -482,7 +482,7 @@ class ExerciseMetabolomicsDataLoader():
         plt.tight_layout()
         if save_fig:            
             filename = f'sportomics--{change_type}--{from_id}--{till_id}.png'
-            plt.savefig(Path('Figures', filename), bbox_inches='tight')
+            plt.savefig(Path('figures', filename), bbox_inches='tight')
         plt.show()
 
 #######################################################################################################################################################################

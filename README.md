@@ -1,33 +1,11 @@
 ## Heterogeneous graph representation learning on protein-protein-metabolite interaction networks
 
-This repository provides an implementation of [MAGNN](https://github.com/cynricfu/MAGNN) applied to the metabolite concentration change sign prediction task as described in the thesis manuscript by Nathan van der Lei, MSc Computational Science, UvA/VU, Amsterdam. This repository was developed in collaboration with the [Fraenkel Lab](http://fraenkel.mit.edu/), Department of Biological Engineering, MIT.
+This repository provides an implementation of [MAGNN](https://github.com/cynricfu/MAGNN) applied to the metabolite concentration change sign prediction task as described in the masters thesis manuscript by Nathan van der Lei, MSc Computational Science, UvA/VU, Amsterdam. This repository was developed in collaboration with the [Fraenkel Lab](http://fraenkel.mit.edu/), Department of Biological Engineering, MIT.
 
 The thesis manuscript itself will become available at [Theses University of Amsterdam](https://scripties.uba.uva.nl)
 
-### Data download
-1. Download "Data.zip" folder from [Dropbox](https://www.dropbox.com/s/iikwrukbtwg8l2n/Data.zip?dl=0)
-2. Unzip "Data.zip" to the same parent directory as this repository
-3. Your file structure should look as intended:
-  - 📁 "YOUR parent directory"
-    - 📄 Data.zip
-    - 📁 Data
-    - 📁 PPMI_MAGNN
-    - ...  
-
-### Usage
-1. Download data (as described previously)
-2. Use `preprocess_PPMI.ipynb` to prepare data for MAGNN and create / load a `Dataloader` object
-3. Use `baselines.ipynb` to train and test vanilla ML methods
-4. Use `network_analysis.ipynb` to investigate the PPMI network
-5. Create `checkpoint/` folder in repository for model saving
-6. Run the command `python run_PPMI.py` from terminal to train MAGNN
-7. Use `inspect_model.ipynb` to investigate a trained model, access embeddings and visualize nodes
-8. Use `compare_results.ipynb` to visualize experimental results
-
-Run `python run_PPMI.py --help` for more information about the available options of the PPMI MAGNN implementation. 
-
 ### Project overview
-The implementation uses 4 data components:
+The implementation proposed in this work uses 4 data components:
 1. **PPMI network**: under active development at the [Fraenkel Lab](https://github.com/fraenkel-lab)
 2. **Metabolite attributes**: with data from [HMDB 4.0 download](https://hmdb.ca/downloads)
 3. **Protein attributes**: with data from [Protein Atlas download](https://www.proteinatlas.org/search)
@@ -44,28 +22,86 @@ The implementation uses 4 data components:
 |  **MAGNN 2**  |         x         |              x             |                      |            x           |
 |  **MAGNN 3**  |         x         |              x             |           x          |            x           |
 
+### Data download
+1. Download "Data.zip" folder from [Dropbox](https://www.dropbox.com/s/iikwrukbtwg8l2n/Data.zip?dl=0)
+2. Unzip "Data.zip" to the same parent directory as this repository
+3. Your file structure should look as intended:
+  - 📁 "YOUR parent directory"
+    - 📄 Data.zip
+    - 📁 Data
+    - 📁 PPMI_MAGNN
+    - ...  
+
+### Usage
+1. Download data (as described previously)
+2. Use `preprocess_PPMI.ipynb` to prepare data for MAGNN and create / load a `Dataloader` object
+3. Use `data_analysis.ipynb` to investigate the PPMI network, metabolite attributes, protein attributes, metabolite class labels
+4. Use `baselines.ipynb` to train and test vanilla ML methods
+5. Create `checkpoint/` folder in repository for model saving
+6. Run the command `python run_PPMI.py` from terminal to train MAGNN
+7. Use `inspect_model.ipynb` to investigate a trained model, access embeddings and visualize nodes
+8. Use `compare_results.ipynb` to visualize experimental results
+
+Run `python run_PPMI.py --help` for more information about the available options of the PPMI MAGNN implementation. 
+
+### Dependencies
+
+Recent versions of the following packages for Python 3 are required:
+* PyTorch 1.2.0
+* DGL 0.3.1
+* NetworkX 2.3
+* scikit-learn 0.21.3
+* NumPy 1.17.2
+* SciPy 1.3.1
+* matplotlib_venn
+
 ### QA
+
+**Q: What is this whole project about?** <br>
+A: Metabolites are small molecules that interact in biochemical pathways. The metabolomics research field studies metabolites and is challenged with data engineering challenges. There are a lot of metabolites to be found in human biofluids like blood. Experimental results usually only report a small fraction of all metabolites, due to limitations in MS and NMR based measurements techniques. This project aims to predict unknown properties of metabolites that weren't measured in an experiment but could be infered from their known attributes and their role in known protein-protein-metabolite interaction networks. For this reason, heterogenous graph representation learning techniques in the form of the MAGNN algorithm are applied. Please read the thesis manuscript to better understand the challenges and nuances of this project.
 
 **Q: Where can I find relevant code?** <br>
 A: Some relevant code snippets are mentioned here:
 - The `DataLoader` class in `PPMI_dataloader.py` can be used to perform the data preprocessing.
-- The `ExerciseMetabolomicsDataLoader` can be used to obtain mean log2fold change values per metabolite from a publication
-- The `load_PPMI_data` function in `utils/data.py` is build to load data into MAGNN specific format.
+- The `ExerciseMetabolomicsDataLoader` class in `PPMI_dataloader.py` can be used to obtain mean log2fold change and CCS values per metabolite from a publication
+- The `MetaboliteNameMatcher` class in `PPMI_dataloader.py` can be used to obtain HMDB IDs and KEGG IDs from metabolite name strings
 - The `get_metapath_neighbor_pairs_PPMI_MP` function in `preprocess_PPMI.ipynb` can be used to obtain metapath instances by brute force search. The search is parallelized using `multiprocessing` for computational optimization.
+- The `load_PPMI_data` function in `utils/data.py` is build to load data into MAGNN specific format.
+- The `evaluate_results_nc` function in `utils/tools.py` is used to evaluate performance
+- The relational rotation encoder is used when `--rnn-type RotatE0` is used in `run_PPMI.py`. The actual usage is implemented in the `forward` function in the `MAGNN_metapath_specific` class in `model/base_MAGNN.py`. This functionality allows metapath instance specific information like protein attributes to be included in the training process.
 
 **Q: How does the data preprocessing work?** <br>
-A: The preprocessing happens at initalization of a `DataLoader` object in `PPMI_dataloader.py`. Depending on some preprocessing settings the correct data is retrieved, combined and stored in the `DataLoader` class. 
+A: The preprocessing happens at initalization of a `DataLoader` object in `PPMI_dataloader.py`. Depending on some preprocessing settings the correct data is retrieved, combined and stored in the `DataLoader` class. The picture below illustrates the preprocessing procedures.
 
 ![](images/preprocessing_workflow.png)
+
+**Q: How does the MAGNN algorithm work?** <br>
+A: Please refer to te original publication available at [arXiv:2002.01680](https://arxiv.org/abs/2002.01680) and original code base of [MAGNN](https://github.com/cynricfu/MAGNN) for full details. The algorithm essentially consists of 3 components:
+1. Node content transformation
+2. Intra-metapath aggregation
+3. Inter-metapath aggregation
+
+The picture below is taken from the original publication and graphically illustrates the working.
+
+![](images/MAGNN.png)
 
 **Q: Where can I find the documentation?** <br>
 A: The codebase is designed to be self contained and all relevant documentation can be found in the code itself. It is assumed users are fluent in Python and are able to work with jupyter notebooks and terminal scripts by themselves.
 
-**Q: Is there a Docker image available?** <br>
-A: currently there is no Docker image available for this project.
+<!-- **Q: Is there a Docker image available?** <br>
+A: currently there is no Docker image available for this project. -->
 
 **Q: How can I make predictions for a new metabolomics publication?** <br>
 A: The publication should contain supplementary data on metabolite abundances pre and post intervention. The data files should be uploaded into the correct data folder in the correct format.
+
+**Q: Why are there different version of the MAGNN model?** <br>
+A: In the `model` folder there are different versions of the MAGNN model, because:
+- `nc` means node classification.
+- `lp` means link prediction.
+- `MAGNN_nc.py` is for whole-batch training
+- `MAGNN_nc_mb.py` is for mini-batched training
+
+This work uses the latter `MAGNN_nc_mb` for node classification and working in batches.
 
 **Q: How to cite this work?**
 A: if you find this work useful, please consider citing:
@@ -92,16 +128,6 @@ A: if you find this work useful, please consider citing:
 
 <!-- - [Markdown-cheat-sheet](https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet)
 - [Emoji-cheat-sheet](https://github.com/ikatyang/emoji-cheat-sheet) -->
-
-### Dependencies
-
-Recent versions of the following packages for Python 3 are required:
-* PyTorch 1.2.0
-* DGL 0.3.1
-* NetworkX 2.3
-* scikit-learn 0.21.3
-* NumPy 1.17.2
-* SciPy 1.3.1
 
 ### Other benchmark datasets
 
