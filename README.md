@@ -127,6 +127,13 @@ A: if you find this work useful, please consider citing:
 > The Web Conference, 2020. <br>
 > EPrint: [arXiv:2002.01680](https://arxiv.org/abs/2002.01680)
 
+- Human metabolome Database (HMDB) for feature engineering:
+> HMDB 4.0: the human metabolome database for 2018.<br>
+> David S Wishart et al. <br>
+> Nucleic Acids Research, Vol. 46, Oxford University Press (OUP) <br>
+> DOI: [10.1093/nar/gkx1089](https://doi.org/10.1093/nar/gkx1089) <br>
+> URL: [hmdb.ca](https://hmdb.ca/)
+
 <!-- - [Markdown-cheat-sheet](https://github.com/adam-p/markdown-here/wiki/Markdown-Cheatsheet)
 - [Emoji-cheat-sheet](https://github.com/ikatyang/emoji-cheat-sheet) -->
 
