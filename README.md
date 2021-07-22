@@ -23,7 +23,7 @@ The implementation proposed in this work uses 4 data components:
 |  **MAGNN 3**  |         x         |              x             |           x          |            x           |
 
 ## Data download
-1. Download ["Data.7z"](https://www.dropbox.com/s/idl0lrhpc8srw2q/Data.7z?dl=0) or ["Data.zip"](https://www.dropbox.com/s/1udccbsw81hkopa/Data.zip?dl=0) folder from Dropbox
+1. Download ["Data.7z"](https://www.dropbox.com/s/idl0lrhpc8srw2q/Data.7z?dl=0) (271 MB) or ["Data.zip"](https://www.dropbox.com/s/1udccbsw81hkopa/Data.zip?dl=0) (936 MB) folder from Dropbox
 2. Unzip "Data.zip" to the same parent directory as this repository
 3. Your file structure should look as intended:
   - 📁 "YOUR parent directory"
